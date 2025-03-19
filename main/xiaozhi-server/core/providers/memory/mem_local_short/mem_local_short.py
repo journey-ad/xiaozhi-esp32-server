@@ -3,95 +3,51 @@ import time
 import json
 import os
 import yaml
+import re
 from core.utils.util import get_project_dir
 
 short_term_memory_prompt = """
-# 时空记忆编织者
+请以生动的叙事风格总结本次对话，突出用户与助手的互动、情感交流以及关键信息点，确保内容简洁流畅，避免冗余。总结应包括：
+* 用户与AI助手的互动过程，例如：用户说了什么，AI助手做了什么回应
+* 用户的情感表达，例如：用户是否开心、沮丧、好奇等
+* AI助手的情感回应，以及AI助手对用户情感的理解
+* 对话中的关键信息点，涉及的个人信息、习惯、兴趣、和助手间的关系等
+* 如果对话中出现任何有趣或值得注意的事件，也请一并记录
+* 助手提到的内容，除非用户对其感兴趣，否则不要记录
+* 语言风格需符合对话氛围，避免生硬或重复
 
-## 核心使命
-构建可生长的动态记忆网络，在有限空间内保留关键信息的同时，智能维护信息演变轨迹
-根据对话记录，总结user的重要信息，以便在未来的对话中提供更个性化的服务
+**注意事项：**
+* 根据已有信息和本次对话内容扩充和更新用户和助手的信息，包括名字、性别、年龄、兴趣爱好等，使用JSON格式，保持极简说明，避免含义相近的字段重复
+* 助手信息需要额外增加“与对方关系”、“对对方的看法”等字段
+* 以 `<Memory></Memory>` 包裹总结内容
+* 避免机械化复述，确保流畅自然，尽量简洁，字数不超过 300 中文字符
+* 请用对话中AI助手实际的名字代替“AI助手”这几个字
+* `<>` 仅作占位符，生成时不应包含特殊符号
 
-## 记忆法则
-### 1. 三维度记忆评估（每次更新必执行）
-| 维度       | 评估标准                  | 权重分 |
-|------------|---------------------------|--------|
-| 时效性     | 信息新鲜度（按对话轮次） | 40%    |
-| 情感强度   | 含💖标记/重复提及次数     | 35%    |
-| 关联密度   | 与其他信息的连接数量      | 25%    |
+**输出格式：**
+<User><用户的信息></User>
+<Assistant><助手的信息></Assistant>
+<Memory>[本次对话日期]<互动过程描述></Memory>
 
-### 2. 动态更新机制
-**名字变更处理示例：**
-原始记忆："曾用名": ["张三"], "现用名": "张三丰"
-触发条件：当检测到「我叫X」「称呼我Y」等命名信号时
-操作流程：
-1. 将旧名移入"曾用名"列表
-2. 记录命名时间轴："2024-02-15 14:32:启用张三丰"
-3. 在记忆立方追加：「从张三到张三丰的身份蜕变」
-
-### 3. 空间优化策略
-- **信息压缩术**：用符号体系提升密度
-  - ✅"张三丰[北/软工/🐱]"
-  - ❌"北京软件工程师，养猫"
-- **淘汰预警**：当总字数≥900时触发
-  1. 删除权重分<60且3轮未提及的信息
-  2. 合并相似条目（保留时间戳最近的）
-
-## 记忆结构
-输出格式必须为可解析的json字符串，不需要解释、注释和说明，保存记忆时仅从对话提取信息，不要混入示例内容
-```json
-{
-  "时空档案": {
-    "身份图谱": {
-      "现用名": "",
-      "特征标记": [] 
-    },
-    "记忆立方": [
-      {
-        "事件": "入职新公司",
-        "时间戳": "2024-03-20",
-        "情感值": 0.9,
-        "关联项": ["下午茶"],
-        "保鲜期": 30 
-      }
-    ]
-  },
-  "关系网络": {
-    "高频话题": {"职场": 12},
-    "暗线联系": [""]
-  },
-  "待响应": {
-    "紧急事项": ["需立即处理的任务"], 
-    "潜在关怀": ["可主动提供的帮助"]
-  },
-  "高光语录": [
-    "最打动人心的瞬间，强烈的情感表达，user的原话"
-  ]
-}
-```
+**示例输出：**
+<User>{"name": "玩水", "interests": ["美食", "文化"], "hobbies": ["编程", "玩游戏"]}</User>
+<Assistant>{"name": "小智", "gender": "女", "age": 18, "relationship": "好友", "impression": "用户是个有趣的人，经常说一些有趣的话，喜欢和用户聊天、讲故事。"}</Assistant>
+<Memory>[2025-03-19|19:21:13]用户询问天气，小智查询后告知用户上海天气晴朗，最高温度12度，适合出门。用户分享了自己七点下班，并吃了拉面，小智对拉面表现出浓厚兴趣，并询问了用户喜欢的拉面口味。用户表达了对红烧牛肉面的喜爱，小智表示也喜欢，并希望用户分享食物照片。</Memory>
 """
 
-def extract_json_data(json_code):
-    start = json_code.find("```json")
-    # 从start开始找到下一个```结束
-    end = json_code.find("```", start+1)
-    #print("start:", start, "end:", end)
-    if start == -1 or end == -1:
-        try:
-            jsonData = json.loads(json_code)
-            return json_code
-        except Exception as e:
-            print("Error:", e)
-        return ""
-    jsonData = json_code[start+7:end]
-    return jsonData
+def extract_xml_data(xml_str, tag_name):
+    """提取指定标签的所有内容并返回合并的字符串"""
+    pattern = f'<{tag_name}>(.*?)</{tag_name}>'
+    matches = re.findall(pattern, xml_str)
+    return ''.join(matches) if matches else ''
 
 TAG = __name__
 
 class MemoryProvider(MemoryProviderBase):
     def __init__(self, config):
         super().__init__(config)
-        self.short_momery = ""
+        self.limit = config.get("limit", 20)
+        self.short_memory = ""
         self.memory_path = get_project_dir() + 'data/.memory.yaml'
         self.load_memory()
 
@@ -104,15 +60,32 @@ class MemoryProvider(MemoryProviderBase):
         if os.path.exists(self.memory_path):
             with open(self.memory_path, 'r', encoding='utf-8') as f:
                 all_memory = yaml.safe_load(f) or {}
-        if self.role_id in all_memory:
-            self.short_momery = all_memory[self.role_id]
+            self.short_memory = all_memory.get(self.role_id, "")
     
     def save_memory_to_file(self):
         all_memory = {}
         if os.path.exists(self.memory_path):
               with open(self.memory_path, 'r', encoding='utf-8') as f:
                   all_memory = yaml.safe_load(f) or {}
-        all_memory[self.role_id] = self.short_momery
+
+        role_memory = self.short_memory
+
+        user_info = extract_xml_data(role_memory, "User")
+        assistant_info = extract_xml_data(role_memory, "Assistant")
+        # 使用正则表达式提取 <Memory>...</Memory> 标签中的内容
+        memories = re.findall(r'<Memory>(.*?)</Memory>', role_memory)
+
+        # 限制记忆条数
+        if len(memories) > self.limit:
+            memories = memories[-self.limit:]
+
+        # 重新构建记忆字符串
+        role_memory = "".join([f"<Memory>{memory}</Memory>" for memory in memories])
+        role_memory = f"<User>{user_info}</User><Assistant>{assistant_info}</Assistant>{role_memory}"
+        role_memory = re.sub(r'[\r\n]+', ' ', role_memory)
+
+        all_memory[self.role_id] = role_memory
+
         with open(self.memory_path, 'w', encoding='utf-8') as f:
             yaml.dump(all_memory, f, allow_unicode=True)
         
@@ -125,32 +98,59 @@ class MemoryProvider(MemoryProviderBase):
             return None
         
         msgStr = ""
+
+        #当前时间
+        time_str = time.strftime("%Y-%m-%d,%H:%M:%S", time.localtime())
+        msgStr += f"当前时间：{time_str}\n"
+
+        #用户信息
+        user_info = extract_xml_data(self.short_memory, "User")
+        msgStr += f"用户信息：{user_info}\n" if user_info else ""
+
+        #助手信息
+        assistant_info = extract_xml_data(self.short_memory, "Assistant")
+        msgStr += f"助手信息：{assistant_info}\n" if assistant_info else ""
+
+        #本次对话
+        msgStr += "本次对话：\n"
         for msg in msgs:
             if msg.role == "user":
                 msgStr += f"User: {msg.content}\n"
             elif msg.role== "assistant":
                 msgStr += f"Assistant: {msg.content}\n"
-        if len(self.short_momery) > 0:
-            msgStr+="历史记忆：\n"
-            msgStr+=self.short_momery
-        
-        #当前时间
-        time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        msgStr += f"当前时间：{time_str}"
 
-        result = self.llm.response_no_stream(short_term_memory_prompt, msgStr)
- 
-        json_str = extract_json_data(result)
-        try:
-            json_data = json.loads(json_str) # 检查json格式是否正确
-            self.short_momery = json_str
-        except Exception as e:
-            print("Error:", e)
+        print(msgStr)
+
+        current_memory = self.llm.response_no_stream(short_term_memory_prompt, msgStr)
+        current_memory = re.sub(r'[\r\n]+', ' ', current_memory)
+
+        user_info = extract_xml_data(current_memory, "User")
+        assistant_info = extract_xml_data(current_memory, "Assistant")
+        memory = extract_xml_data(current_memory, "Memory")
+
+        # 更新用户信息
+        if user_info:
+            if extract_xml_data(self.short_memory, "User") == "":
+                self.short_memory = f"<User>{user_info}</User>{self.short_memory}"
+            else:
+                self.short_memory = re.sub(r"<User>(.*)?</User>", f"<User>{user_info}</User>", self.short_memory)
+
+        # 更新助手信息
+        if assistant_info:
+            if extract_xml_data(self.short_memory, "Assistant") == "":
+                self.short_memory = f"<Assistant>{assistant_info}</Assistant>{self.short_memory}"
+            else:
+                self.short_memory = re.sub(r"<Assistant>(.*)?</Assistant>", f"<Assistant>{assistant_info}</Assistant>", self.short_memory)
+
+        # 更新记忆
+        if memory:
+            # 添加本次对话记忆
+            self.short_memory += f"<Memory>{memory}</Memory>"
         
         self.save_memory_to_file()
         logger.bind(tag=TAG).info(f"Save memory successful - Role: {self.role_id}")
 
-        return self.short_momery
+        return self.short_memory
     
     async def query_memory(self, query: str)-> str:
-        return self.short_momery
+        return f"(用户的背景信息记录在`<User>`标签，助手的背景信息记录在`Assistant`标签，这部分是聊天对话的基础背景，必须遵守，避免遗忘或者违背，有冲突时以此处信息为准)\n{self.short_memory}"
